@@ -517,15 +517,80 @@ fn run_log(
     Ok(0)
 }
 
+/// True for git log/diff options that take their value as a separate,
+/// space-delimited token (e.g. `--grep -p` searches messages for the
+/// literal string "-p"; it does not request patch output). Consuming
+/// that value token keeps flag-lookalike values from being misread as
+/// the corresponding boolean flag.
+fn consumes_next_token_as_value(arg: &str) -> bool {
+    matches!(
+        arg,
+        "--grep"
+            | "--author"
+            | "--committer"
+            | "--since"
+            | "--after"
+            | "--since-as-filter"
+            | "--until"
+            | "--before"
+            | "--grep-reflog"
+            | "--glob"
+            | "--exclude"
+            | "--encoding"
+            | "--expand-tabs"
+            | "--date"
+            | "--diff-merges"
+            | "--output"
+            | "--output-indicator-new"
+            | "--output-indicator-old"
+            | "--output-indicator-context"
+            | "--anchored"
+            | "--stat-width"
+            | "--stat-name-width"
+            | "--stat-count"
+            | "--color-moved-ws"
+            | "--word-diff-regex"
+            | "--ws-error-highlight"
+            | "--find-object"
+            | "--skip-to"
+            | "--rotate-to"
+            | "--inter-hunk-context"
+            | "--src-prefix"
+            | "--dst-prefix"
+            | "--line-prefix"
+            | "--max-depth"
+            | "--decorate-refs"
+            | "--decorate-refs-exclude"
+            | "--skip"
+            | "--min-parents"
+            | "--max-parents"
+            | "--unified"
+            | "-S"
+            | "-G"
+            | "-O"
+            | "-I"
+            | "-L"
+            | "-U"
+            | "-l"
+            | "-n"
+    )
+}
+
 fn requests_raw_log_output(args: &[String]) -> bool {
-    args.iter()
-        .take_while(|arg| *arg != "--")
-        .any(|arg| {
-            matches!(
-                arg.as_str(),
-                "-p" | "-u" | "--patch" | "--patch-with-raw" | "--patch-with-stat"
-            )
-        })
+    let mut iter = args.iter().take_while(|arg| *arg != "--");
+    while let Some(arg) = iter.next() {
+        if consumes_next_token_as_value(arg.as_str()) {
+            iter.next(); // skip the value token, whatever it looks like
+            continue;
+        }
+        if matches!(
+            arg.as_str(),
+            "-p" | "-u" | "--patch" | "--patch-with-raw" | "--patch-with-stat"
+        ) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Filter git log output: truncate long messages, cap lines
@@ -2777,6 +2842,30 @@ A  added.rs
                 "{flag} should remain on the filtered log path"
             );
         }
+    }
+
+    #[test]
+    fn test_patch_flag_as_value_of_grep_is_not_misdetected() {
+        // `git log --grep -p` searches commit messages for the literal
+        // string "-p"; git does not treat it as the patch flag.
+        for opt in ["--grep", "--author", "--committer", "-S", "-G"] {
+            let args = vec![opt.to_string(), "-p".to_string()];
+            assert!(
+                !requests_raw_log_output(&args),
+                "-p as the value of {opt} should stay on the filtered path"
+            );
+        }
+    }
+
+    #[test]
+    fn test_patch_flag_still_detected_after_value_taking_option() {
+        // The value-taking option consumes only its own value token;
+        // a genuine -p later in the args still triggers the raw path.
+        let args = vec!["--grep".to_string(), "fix".to_string(), "-p".to_string()];
+        assert!(
+            requests_raw_log_output(&args),
+            "a real -p after --grep's value should still request raw output"
+        );
     }
 
     #[test]
